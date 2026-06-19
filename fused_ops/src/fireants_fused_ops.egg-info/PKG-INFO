@@ -1,0 +1,8 @@
+Metadata-Version: 2.2
+Name: fireants_fused_ops
+Version: 1.0.0
+Summary: Fused CUDA operations for FireANTs
+Author: Rohit Jena
+Project-URL: Homepage, https://github.com/rohitrango/FireANTs
+Requires-Python: >=3.8
+Requires-Dist: torch>=2.3.0

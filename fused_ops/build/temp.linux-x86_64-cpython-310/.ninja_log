@@ -1,0 +1,9 @@
+# ninja log v7
+2	46470	1764833708458664233	/home/weiyahui/projects/Monkey_Surface/test/test_tissue_guide_reg/FireANTs-main/fused_ops/build/temp.linux-x86_64-cpython-310/src/src.o	6d070686c7d8ba44
+1	175856	1764833708458664233	/home/weiyahui/projects/Monkey_Surface/test/test_tissue_guide_reg/FireANTs-main/fused_ops/build/temp.linux-x86_64-cpython-310/src/AdamUtils.o	a0dccf175987d8c6
+2	182880	1764833708458664233	/home/weiyahui/projects/Monkey_Surface/test/test_tissue_guide_reg/FireANTs-main/fused_ops/build/temp.linux-x86_64-cpython-310/src/GaussianBlurFFT.o	8759fe969cf91738
+1	190099	1764833708458664233	/home/weiyahui/projects/Monkey_Surface/test/test_tissue_guide_reg/FireANTs-main/fused_ops/build/temp.linux-x86_64-cpython-310/src/FusedGridComposer.o	2543966a8015327e
+1	194037	1764833708458664233	/home/weiyahui/projects/Monkey_Surface/test/test_tissue_guide_reg/FireANTs-main/fused_ops/build/temp.linux-x86_64-cpython-310/src/FusedGenerateGrid.o	299735eb45eb91eb
+2	198836	1764833708458664233	/home/weiyahui/projects/Monkey_Surface/test/test_tissue_guide_reg/FireANTs-main/fused_ops/build/temp.linux-x86_64-cpython-310/src/MutualInformation.o	9036221aae123795
+2	202530	1764833708458664233	/home/weiyahui/projects/Monkey_Surface/test/test_tissue_guide_reg/FireANTs-main/fused_ops/build/temp.linux-x86_64-cpython-310/src/FusedGridSampler.o	fd9802e6d392bd06
+1	208202	1764833708458664233	/home/weiyahui/projects/Monkey_Surface/test/test_tissue_guide_reg/FireANTs-main/fused_ops/build/temp.linux-x86_64-cpython-310/src/CrossCorrelation.o	60cf96f2f8a7ed96
