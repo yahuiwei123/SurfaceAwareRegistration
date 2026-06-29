@@ -6,6 +6,16 @@ The goal is to improve cortical localization during volumetric registration. Pur
 
 The resulting deformation field is therefore constrained by both volumetric image similarity and cortical surface geometry, while regularization terms maintain smooth and stable volumetric transformations.
 
+## Motivation: Why Volume-Only Registration Falls Short for Cortical Alignment
+
+Standard volumetric registration methods optimize image similarity based solely on voxel intensities. While effective for subcortical structures, this approach has a fundamental limitation in the cortex: cortical regions that are far apart along the folded cortical sheet can be spatially adjacent in 3D Euclidean space (e.g., opposite banks of a sulcus). A purely volume-based loss function has no notion of cortical geometry and may therefore blur or misalign these regions, collapsing sulcal banks or pulling unrelated cortical areas together. This leads to suboptimal anatomical correspondence, particularly for surface-based analyses that require precise cortical alignment.
+
+Surface-aware registration addresses this by adding a geometric constraint: the deformed subject cortical surface must remain close to the template cortical surface throughout the optimization. This extra loss term constrains the volumetric deformation field to respect cortical folding anatomy, yielding deformation fields that produce better cortical alignment while still maintaining high volumetric image similarity.
+
+![Surface-Aware vs Volume-Only Registration](figures/surface_aware_registartion_result.png)
+
+**Figure 1. Surface-Aware vs. Volume-Only Registration.** Visual comparison of parcellation alignment with surface-aware (a) and volume-only registration (b). Individual volumetric parcellations were projected to the template space using nonlinear deformation fields estimated by the two registration approaches and visualized in the template volume. Compared with volume-only registration, the surface-aware method shows improved global cortical conformity and better local overlap across most cortical regions, indicating more accurate alignment with cortical anatomy. (c) Boxplots of Dice similarity coefficients for 124 cortical parcels registered to the template. The Surface-Aware strategy (orange) consistently outperforms the Volume-Only approach (blue) across most regions.
+
 ## Overview
 
 Given a moving/source subject and a fixed/template target, the pipeline jointly uses:
