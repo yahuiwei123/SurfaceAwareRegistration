@@ -177,14 +177,6 @@ These parameters can be adjusted for faster testing or more intensive optimizati
 
 The default loss configuration uses local normalized cross-correlation for images, MSE for surface vertices, diffusion regularization for displacement fields, and a forward/reverse consistency penalty.
 
-## Limitations
-
-- The current script assumes CUDA and explicitly moves tensors to `cuda`.
-- The default surface loss assumes vertex-wise correspondence between source and target surfaces.
-- Output directories should exist before running the script.
-- The current warp-saving path is minimal and may need extension if a full 3-channel deformation field is required.
-- `--convergence_eps` is parsed by the CLI, but the current optimization loop runs according to the specified iteration counts.
-
 ## Citation
 
 If you use this registration method in your research, please cite:
