@@ -187,12 +187,9 @@ The default loss configuration uses local normalized cross-correlation for image
 
 ## Citation
 
-The surface-aware registration algorithm described here is based on the article associated with:
+If you use this registration method in your research, please cite:
 
-```text
-DOI: 10.64898/2026.06.14.732101
-URL: https://doi.org/10.64898/2026.06.14.732101
-```
+> Wei, Y. et al. *MacaSurfer: unified surface-volume mapping of the macaque brain across the lifespan.* 2026.06.14.732101 Preprint at https://doi.org/10.64898/2026.06.14.732101 (2026).
 
 If you use the underlying FireANTs framework, please also cite:
 
