@@ -123,7 +123,7 @@ class AffineWarpField(nn.Module):
             moving,
             grid,
             mode='bilinear',
-            padding_mode='border',
+            padding_mode='zeros',
             align_corners=align_corners,
         )
         return moved, grid

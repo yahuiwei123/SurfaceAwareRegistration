@@ -18,7 +18,7 @@ def get_affine_transform(fixed_image, moving_image, fixed_surf, moving_surf):
     affine_iters = 200
     affine_optimizer = torch.optim.AdamW(
         affine_model.parameters(),
-        lr=1e-2,
+        lr=1e-7,
         weight_decay=0.9,
     )
     ncc_img_loss_fn = LocalNormalizedCrossCorrelationLoss(kernel_size=11)
@@ -46,7 +46,7 @@ def get_affine_transform(fixed_image, moving_image, fixed_surf, moving_surf):
                 moving_image.shape[2:]
             )
 
-        loss_affine = 1e-4 * img_loss + 1.0 * surf_loss
+        loss_affine = 1e0 * img_loss + 1e0 * surf_loss
         pbar.set_postfix(
             total=f"{loss_affine.item():.3e}",
             vol=f"{img_loss.item():.3e}",
