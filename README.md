@@ -38,7 +38,8 @@ The registration optimizes a multi-scale symmetric deformation model. The object
 
 ```text
 surf_fireants/
-├── register_with_surf.py          # Main registration script
+├── register_with_nosurf.py        # Volume-only registration entry point
+├── register_with_surf.py          # Surface-aware registration entry point
 ├── pyproject.toml                 # Python package metadata and dependencies
 ├── fireants/
 │   ├── registration/
@@ -58,11 +59,12 @@ surf_fireants/
 
 ## Method Summary
 
-The main entry point is `register_with_surf.py`.
+Use `register_with_nosurf.py` for volume-only registration and
+`register_with_surf.py` when cortical surfaces should contribute to the loss.
 
 First, the source and target volumes are loaded and normalized using nonzero voxels. If cortical surfaces are provided, they are loaded from GIFTI files and transformed into the corresponding voxel coordinate space using the associated NIfTI affine matrices.
 
-An initial affine transform is estimated before nonlinear optimization. When surfaces are available, this affine stage also includes a surface alignment term.
+An initial affine transform is estimated before nonlinear optimization. By default (`--affine_space voxel`), this optimization maps the fixed normalized voxel domain to the moving normalized voxel domain and ignores NIfTI header locations, so disjoint physical bounding boxes do not cause all-zero sampling gradients. When surfaces are available, this affine stage also includes a surface alignment term. Use `--affine_space physical` only when the legacy header-aware affine behavior is desired.
 
 The nonlinear registration then optimizes forward and reverse deformation fields over multiple spatial scales. At each scale, the algorithm computes image similarity, surface distance, displacement regularization, and forward/reverse consistency losses. The optimized transform is used to warp the source volume, optional labels, and optional cortical surface into the target space.
 
@@ -117,8 +119,15 @@ cd ..
 | `--src_mask` | `.nii` / `.nii.gz` | Source brain mask for region-of-interest cropping |
 | `--trg_mask` | `.nii` / `.nii.gz` | Target brain mask for region-of-interest cropping |
 | `--crop_margin` | int (default: 7) | Voxel margin around mask when cropping |
+| `--no_reorient` | flag | Disable the default internal reorientation of all volumes, masks, and labels to RAS |
 
 For the default MSE surface loss, source and target surfaces should have corresponding vertices and matching topology. If the surfaces are not vertex-wise corresponding, the surface loss should be adapted, for example by using a Chamfer-style loss.
+
+By default, source and target NIfTI inputs are reoriented internally to RAS
+before affine and nonlinear optimization. This prevents voxel-axis mismatches
+such as LIA versus LAS from forcing the affine optimizer to discover a large
+axis permutation from an identity initialization. Masks and labels are
+reoriented with their paired volume and must share its shape and affine.
 
 ## Outputs
 
@@ -131,9 +140,49 @@ For the default MSE surface loss, source and target surfaces should have corresp
 | `--out_inv_warp` | `.nii` / `.nii.gz` | Optional inverse warp output |
 | `--warp_format` | `fsl` or `ants` (default: `fsl`) | Deformation field output format |
 
-`out_vol` and `out_lbl` are saved using the target volume affine. `out_surf` is saved as a GIFTI surface using the deformed source vertices and the original source surface faces.
+`out_vol` and `out_lbl` are restored to the target's original voxel-axis order
+and saved using the target volume affine. Forward and inverse warps are also
+converted back to the original reference and moving grids. `out_surf` remains
+in physical coordinates and is saved using the deformed source vertices and
+the original source surface faces.
 
 ## Basic Usage
+
+For a pre-aligned image pair, run only the residual nonlinear volume stage:
+
+```bash
+python register_with_nosurf.py \
+  --src_vol affine_aligned_source.nii.gz \
+  --trg_vol target.nii.gz \
+  --nonlinear_only \
+  --out_vol source_to_target.nii.gz \
+  --out_warp forward_warp.nii.gz \
+  --out_inv_warp inverse_warp.nii.gz \
+  --warp_format ants
+```
+
+`--nonlinear_only` requires source and target volumes to have the same image
+shape and affine. This is the mode used by MacaSurfer `generalRegister.sh`
+after its existing linear initialization has resampled the moving image onto
+the target grid.
+
+The volume-only entry point rescales all terms from the calibrated
+surface-aware objective so that the image term has unit weight without
+weakening diffusion or inverse-consistency regularization:
+
+```text
+--image_weight 1.0
+--displacement_weight 1e4
+--consistency_weight 2e4
+```
+
+These values divide the original `0.5` diffusion and `1.0` consistency weights
+by the original image weight `6e-5`, preserving their relative strength. The
+surface-aware entry point retains the calibrated joint objective with
+`--image_weight 6e-5` and `--surface_weight 1.0`. All loss weights are exposed
+as command-line options for reproducible tuning.
+
+For surface-aware registration:
 
 ```bash
 python register_with_surf.py \

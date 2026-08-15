@@ -93,7 +93,10 @@ class GreedyRegistration(nn.Module):
         fixed_roi: Optional[torch.Tensor] = None,
         moving_roi: Optional[torch.Tensor] = None,
         surf_loss_func: Optional[Callable] = None,
+        image_weight: float = 6e-5,
         surf_weight: float = 1.0,
+        displacement_weight: float = 5e-1,
+        consistency_weight: float = 1.0,
         deformation_type: str = "compositive",
         optimizer: str = "Adam",
         optimizer_params: dict = {},
@@ -148,7 +151,10 @@ class GreedyRegistration(nn.Module):
         self.moving_roi = moving_roi
         
         self.surf_loss_func = surf_loss_func
+        self.image_weight = image_weight
         self.surf_weight = surf_weight
+        self.displacement_weight = displacement_weight
+        self.consistency_weight = consistency_weight
 
         # 选择 warp 类型
         smooth_warp_sigma = 0
@@ -269,8 +275,12 @@ class GreedyRegistration(nn.Module):
         for scale, iters in zip(self.scales, self.iterations):
             self.convergence_monitor.reset()
 
-            fixed_size_down = [max(int(s / scale), MIN_IMG_SIZE) for s in fixed_size]
-            moving_size_down = [max(int(s / scale), MIN_IMG_SIZE) for s in moving_size]
+            fixed_size_down = [
+                min(s, max(int(s / scale), MIN_IMG_SIZE)) for s in fixed_size
+            ]
+            moving_size_down = [
+                min(s, max(int(s / scale), MIN_IMG_SIZE)) for s in moving_size
+            ]
 
             # 下采样 fixed / moving（这里直接用 F.interpolate 或 downsample）
             if self.blur and scale > 1:
@@ -332,6 +342,17 @@ class GreedyRegistration(nn.Module):
             for i in pbar:
                 self.fwd_warp.set_zero_grad()
                 self.rev_warp.set_zero_grad()
+
+                # Keep optional losses well-defined. The surface-aware and
+                # volume-only entry points share this optimizer; without
+                # surfaces, the surface term must contribute exactly zero.
+                zero_loss = torch.zeros((), device=self.device, dtype=self.dtype)
+                fwd_surf_loss = zero_loss
+                rev_surf_loss = zero_loss
+                surf_loss = zero_loss
+                fwd_reg_loss = zero_loss
+                rev_reg_loss = zero_loss
+                reg_loss = zero_loss
 
                 fwd_disp = self.fwd_warp.get_warp()  # [N, HWD, 3]
                 rev_disp = self.rev_warp.get_warp()
@@ -436,7 +457,16 @@ class GreedyRegistration(nn.Module):
                     coords = self.get_warp_parameters(shape=fixed_size_down, displacement=False)
                     warp_loss = self.fwd_warp_reg(coords["grid"])
 
-                total_loss = 5e-5 * img_loss + 1e0 * surf_loss + 5e-2 * reg_loss + 1e0 * consist_loss
+                weighted_img_loss = self.image_weight * img_loss
+                weighted_surf_loss = self.surf_weight * surf_loss
+                weighted_reg_loss = self.displacement_weight * reg_loss
+                weighted_consist_loss = self.consistency_weight * consist_loss
+                total_loss = (
+                    weighted_img_loss
+                    + weighted_surf_loss
+                    + weighted_reg_loss
+                    + weighted_consist_loss
+                )
 
                 # Weighted loss
                 # fwd_losses = [fwd_img_loss, fwd_surf_loss, fwd_reg_loss, fwd_consist_loss]
@@ -490,9 +520,12 @@ class GreedyRegistration(nn.Module):
                     pbar.set_postfix(
                         total=f"{total_loss.item():.3e}",
                         vol=f"{fwd_img_loss.item():.3e}",
+                        wvol=f"{weighted_img_loss.item():.3e}",
                         surf=f"{rev_surf_loss.item():.3e}",
                         reg=f"{fwd_reg_loss.item():.3e}",
+                        wreg=f"{weighted_reg_loss.item():.3e}",
                         consist=f"{consist_loss.item():.3e}",
+                        wconsist=f"{weighted_consist_loss.item():.3e}",
                     )
 
                 self.fwd_warp.step()

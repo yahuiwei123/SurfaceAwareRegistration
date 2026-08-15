@@ -73,7 +73,14 @@ def grid_to_ants_displacement(grid, reference_img, moving_img):
     moving_world = _vox_to_world(moving_vox, moving_img.affine)
     reference_vox = _voxel_grid(reference_img.shape[:3], grid.device, grid.dtype)
     reference_world = _vox_to_world(reference_vox, reference_img.affine)
-    return (moving_world - reference_world)[0].detach().cpu().numpy().astype(np.float32)
+    displacement_ras = moving_world - reference_world
+    ras_to_lps = torch.tensor(
+        [-1.0, -1.0, 1.0],
+        device=grid.device,
+        dtype=grid.dtype,
+    )
+    displacement_lps = displacement_ras * ras_to_lps
+    return displacement_lps[0].detach().cpu().numpy().astype(np.float32)
 
 
 def grid_to_fsl_relative_displacement(grid, reference_img, moving_img):
@@ -87,12 +94,21 @@ def grid_to_fsl_relative_displacement(grid, reference_img, moving_img):
 def save_ants_displacement(disp, reference_img, out_file):
     import SimpleITK as sitk
 
+    disp = np.asarray(disp, dtype=np.float32)
+    expected_shape = (*reference_img.shape[:3], 3)
+    if disp.shape != expected_shape:
+        raise ValueError(
+            f"ANTs displacement shape {disp.shape} does not match "
+            f"reference shape {expected_shape}"
+        )
+
     ref_file = reference_img.get_filename()
     if ref_file is None:
         _save_vector_nifti(disp, reference_img, out_file)
         return
 
-    warp = sitk.GetImageFromArray(np.asarray(disp, dtype=np.float32), isVector=True)
+    sitk_disp = np.transpose(disp, (2, 1, 0, 3)).copy()
+    warp = sitk.GetImageFromArray(sitk_disp, isVector=True)
     warp.CopyInformation(sitk.ReadImage(ref_file))
     sitk.WriteImage(warp, out_file)
 
