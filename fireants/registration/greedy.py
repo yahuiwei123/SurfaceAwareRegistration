@@ -17,7 +17,6 @@ from fireants.registration.deformation.compositive import CompositiveWarp
 from fireants.losses.cc import gaussian_1d, separable_filtering
 from fireants.utils.imageutils import downsample
 from fireants.interpolator import fireants_interpolator
-from fireants.utils.mesh import deform_mesh, affine_mesh
 from fireants.utils.weights import MGDASolver
 
 import logging
@@ -103,8 +102,8 @@ class GreedyRegistration(nn.Module):
         optimizer_lr: float = 0.5,
         use_mgda: bool = True,
         integrator_n: Union[str, int] = 7,
-        smooth_warp_sigma: float = 0.00,
-        smooth_grad_sigma: float = 0.00,
+        smooth_warp_sigma: float = 0.5,
+        smooth_grad_sigma: float = 1.0,
         reduction: str = "mean",
         tolerance: float = 1e-16,
         max_tolerance_iters: int = 20,
@@ -114,6 +113,7 @@ class GreedyRegistration(nn.Module):
         blur: bool = True,
         freeform: bool = False,
         progress_bar: bool = True,
+        gradient_report_interval: int = 0,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -129,6 +129,10 @@ class GreedyRegistration(nn.Module):
         self.device = fixed_images.device
         self.dtype = fixed_images.dtype
         self.progress_bar = progress_bar
+        if gradient_report_interval < 0:
+            raise ValueError("gradient_report_interval must be non-negative")
+        self.gradient_report_interval = int(gradient_report_interval)
+        self.gradient_reports = []
         self.use_mgda = use_mgda
         self.mgda_solver = MGDASolver(['volume', 'surface', 'displacement', 'consistency'])
 
@@ -157,7 +161,6 @@ class GreedyRegistration(nn.Module):
         self.consistency_weight = consistency_weight
 
         # 选择 warp 类型
-        smooth_warp_sigma = 0
         self.fwd_warp = CompositiveWarp(
             fixed_images, moving_images,
             optimizer=optimizer,
@@ -182,6 +185,10 @@ class GreedyRegistration(nn.Module):
             freeform=freeform,
         )
 
+        # CompositiveWarp applies warp smoothing inside its optimizer after
+        # every update. Keep this copy at zero to avoid smoothing the same
+        # field a second time in the registration loop/evaluation path.
+        smooth_warp_sigma = 0
         self.smooth_warp_sigma = smooth_warp_sigma  # in voxels
 
         # 初始化 affine
@@ -254,6 +261,152 @@ class GreedyRegistration(nn.Module):
 
         return {"affine": affine_map_init, "grid": grid}
 
+    def _report_component_gradients(
+        self,
+        *,
+        scale: int,
+        scale_index: int,
+        iteration: int,
+        iterations_at_scale: int,
+        global_iteration: int,
+        components,
+    ):
+        """Measure each loss term's gradient without changing ``.grad``.
+
+        Parameter hooks are intentionally active here, so the reported values
+        include ``smooth_grad_sigma`` and are the gradients actually presented
+        to the deformation optimizer. ``torch.autograd.grad`` does not
+        accumulate into ``Parameter.grad``; the normal backward pass still
+        happens exactly once after this method returns.
+        """
+        parameters = (self.fwd_warp.warp, self.rev_warp.warp)
+        component_gradients = []
+
+        for name, raw_loss, weight in components:
+            if raw_loss.requires_grad:
+                gradients = torch.autograd.grad(
+                    raw_loss,
+                    parameters,
+                    retain_graph=True,
+                    allow_unused=True,
+                )
+            else:
+                gradients = (None, None)
+
+            raw_gradients = tuple(
+                torch.zeros_like(parameter) if gradient is None else gradient.detach()
+                for parameter, gradient in zip(parameters, gradients)
+            )
+            weighted_gradients = tuple(
+                gradient * float(weight) for gradient in raw_gradients
+            )
+            component_gradients.append(
+                (name, raw_loss, float(weight), raw_gradients, weighted_gradients)
+            )
+
+        total_gradients = tuple(
+            sum(
+                (entry[4][parameter_index] for entry in component_gradients),
+                torch.zeros_like(parameters[parameter_index]),
+            )
+            for parameter_index in range(2)
+        )
+
+        def squared_l2(gradients):
+            return sum(torch.sum(gradient * gradient) for gradient in gradients)
+
+        total_squared = squared_l2(total_gradients)
+        total_l2 = torch.sqrt(total_squared).item()
+        total_elements = sum(parameter.numel() for parameter in parameters)
+        total_rms = torch.sqrt(total_squared / total_elements).item()
+
+        component_norms = [
+            torch.sqrt(squared_l2(entry[4])).item() for entry in component_gradients
+        ]
+        norm_sum = sum(component_norms)
+        eps = torch.finfo(self.dtype).tiny
+        report_rows = []
+
+        for entry, weighted_combined_l2 in zip(component_gradients, component_norms):
+            name, raw_loss, weight, raw_gradients, weighted_gradients = entry
+            raw_squared = [torch.sum(gradient * gradient) for gradient in raw_gradients]
+            weighted_squared = [
+                torch.sum(gradient * gradient) for gradient in weighted_gradients
+            ]
+            weighted_combined_squared = sum(weighted_squared)
+            dot_total = sum(
+                torch.sum(component * total)
+                for component, total in zip(weighted_gradients, total_gradients)
+            )
+            cosine = (
+                dot_total.item() / (weighted_combined_l2 * total_l2)
+                if weighted_combined_l2 > eps and total_l2 > eps
+                else 0.0
+            )
+            projection_fraction = (
+                dot_total.item() / total_squared.item()
+                if total_squared.item() > eps
+                else 0.0
+            )
+            raw_value = raw_loss.detach().item()
+            row = {
+                "scale_index": scale_index,
+                "scale": scale,
+                "iteration": iteration,
+                "iterations_at_scale": iterations_at_scale,
+                "global_iteration": global_iteration,
+                "component": name,
+                "raw_loss": raw_value,
+                "weight": weight,
+                "weighted_loss": raw_value * weight,
+                "raw_fwd_grad_l2": torch.sqrt(raw_squared[0]).item(),
+                "raw_fwd_grad_rms": torch.sqrt(
+                    raw_squared[0] / parameters[0].numel()
+                ).item(),
+                "raw_rev_grad_l2": torch.sqrt(raw_squared[1]).item(),
+                "raw_rev_grad_rms": torch.sqrt(
+                    raw_squared[1] / parameters[1].numel()
+                ).item(),
+                "raw_combined_grad_l2": torch.sqrt(sum(raw_squared)).item(),
+                "raw_combined_grad_rms": torch.sqrt(
+                    sum(raw_squared) / total_elements
+                ).item(),
+                "weighted_fwd_grad_l2": torch.sqrt(weighted_squared[0]).item(),
+                "weighted_fwd_grad_rms": torch.sqrt(
+                    weighted_squared[0] / parameters[0].numel()
+                ).item(),
+                "weighted_rev_grad_l2": torch.sqrt(weighted_squared[1]).item(),
+                "weighted_rev_grad_rms": torch.sqrt(
+                    weighted_squared[1] / parameters[1].numel()
+                ).item(),
+                "weighted_combined_grad_l2": weighted_combined_l2,
+                "weighted_combined_grad_rms": torch.sqrt(
+                    weighted_combined_squared / total_elements
+                ).item(),
+                "weighted_norm_share": (
+                    weighted_combined_l2 / norm_sum if norm_sum > eps else 0.0
+                ),
+                "cosine_with_total_gradient": cosine,
+                "projection_fraction_on_total": projection_fraction,
+                "total_grad_l2": total_l2,
+                "total_grad_rms": total_rms,
+            }
+            report_rows.append(row)
+
+        self.gradient_reports.extend(report_rows)
+        summary = " ".join(
+            f"{row['component']}[rms={row['weighted_combined_grad_rms']:.3e},"
+            f"share={row['weighted_norm_share']:.3f},"
+            f"cos={row['cosine_with_total_gradient']:.3f},"
+            f"proj={row['projection_fraction_on_total']:.3f}]"
+            for row in report_rows
+        )
+        print(
+            f"GRAD_REPORT scale={scale} iteration={iteration}/{iterations_at_scale} "
+            f"global_iteration={global_iteration} total_rms={total_rms:.3e} {summary}",
+            flush=True,
+        )
+
     # ------------------------------
     # 主优化流程（算法几乎未改，只把 BatchedImages 全换成 tensor）
     # ------------------------------
@@ -272,7 +425,10 @@ class GreedyRegistration(nn.Module):
             for s in (torch.zeros(self.dims, device=self.device, dtype=self.dtype) + self.smooth_warp_sigma)
         ]
 
-        for scale, iters in zip(self.scales, self.iterations):
+        global_iteration = 0
+        for scale_index, (scale, iters) in enumerate(
+            zip(self.scales, self.iterations), start=1
+        ):
             self.convergence_monitor.reset()
 
             fixed_size_down = [
@@ -340,6 +496,7 @@ class GreedyRegistration(nn.Module):
             pbar = tqdm(range(iters)) if self.progress_bar else range(iters)
 
             for i in pbar:
+                global_iteration += 1
                 self.fwd_warp.set_zero_grad()
                 self.rev_warp.set_zero_grad()
 
@@ -467,6 +624,28 @@ class GreedyRegistration(nn.Module):
                     + weighted_reg_loss
                     + weighted_consist_loss
                 )
+                should_report_gradients = (
+                    self.gradient_report_interval > 0
+                    and (
+                        i == 0
+                        or (i + 1) % self.gradient_report_interval == 0
+                        or i + 1 == iters
+                    )
+                )
+                if should_report_gradients:
+                    self._report_component_gradients(
+                        scale=scale,
+                        scale_index=scale_index,
+                        iteration=i + 1,
+                        iterations_at_scale=iters,
+                        global_iteration=global_iteration,
+                        components=(
+                            ("image", img_loss, self.image_weight),
+                            ("surface", surf_loss, self.surf_weight),
+                            ("diffusion", reg_loss, self.displacement_weight),
+                            ("consistency", consist_loss, self.consistency_weight),
+                        ),
+                    )
 
                 # Weighted loss
                 # fwd_losses = [fwd_img_loss, fwd_surf_loss, fwd_reg_loss, fwd_consist_loss]

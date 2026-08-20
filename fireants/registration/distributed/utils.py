@@ -22,7 +22,25 @@ import subprocess
 import logging
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-from fireants.interpolator.fused_grid_sample import get_min_coords3d, get_min_coords2d, get_max_coords3d, get_max_coords2d
+def get_min_coords3d(z_size, y_size, x_size, align_corners):
+    if not align_corners:
+        return -1.0 + 1.0 / x_size, -1.0 + 1.0 / y_size, -1.0 + 1.0 / z_size
+    return -1.0, -1.0, -1.0
+
+def get_max_coords3d(z_size, y_size, x_size, align_corners):
+    if not align_corners:
+        return 1.0 - 1.0 / x_size, 1.0 - 1.0 / y_size, 1.0 - 1.0 / z_size
+    return 1.0, 1.0, 1.0
+
+def get_min_coords2d(y_size, x_size, align_corners):
+    if not align_corners:
+        return -1.0 + 1.0 / x_size, -1.0 + 1.0 / y_size
+    return -1.0, -1.0
+
+def get_max_coords2d(y_size, x_size, align_corners):
+    if not align_corners:
+        return 1.0 - 1.0 / x_size, 1.0 - 1.0 / y_size
+    return 1.0, 1.0
 from fireants.registration.distributed import parallel_state
 import os
 

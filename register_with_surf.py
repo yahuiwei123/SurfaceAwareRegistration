@@ -58,6 +58,12 @@ def build_parser():
     parser.add_argument("--affine_learning_rate", type=float, default=3e-3)
     parser.add_argument("--affine_loss", choices=("cc", "mse", "mi"), default="cc")
     parser.add_argument("--affine_cc_kernel_size", type=int, default=5)
+    parser.add_argument(
+        "--affine_max_shear",
+        type=float,
+        default=0.25,
+        help="Maximum absolute coefficient for each of the three affine shear terms",
+    )
     parser.set_defaults(nonlinear_only=False)
     return parser
 
@@ -88,6 +94,10 @@ def _validate(args):
     ):
         if getattr(args, name) < 0:
             raise ValueError(f"--{name} must be non-negative")
+    if not 0 <= args.affine_max_shear <= 1:
+        raise ValueError(
+            "--affine_max_shear must be between 0 and 1"
+        )
 
 
 def main(args):

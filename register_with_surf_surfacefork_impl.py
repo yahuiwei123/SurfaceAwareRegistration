@@ -5,6 +5,8 @@ import torch.nn.functional as F
 import numpy as np
 import nibabel as nib
 import copy
+import csv
+from pathlib import Path
 
 from typing import List, Union, Tuple, Callable, Optional
 
@@ -20,9 +22,7 @@ from monai.losses import (
     DiffusionLoss,
 )
 
-from fireants.neuio.gifti import load_surf_gii, save_surf_gii, load_label_gii
 from fireants.neuio.nifti import load_vol_nii, save_vol_nii
-from fireants.utils.mesh import MeshDeformLoss, deform_mesh, affine_mesh, vox2phy
 from fireants.utils.grid import (
     displacements_to_warps,
     v2img_3d,
@@ -515,6 +515,11 @@ def build_full_reverse_warp_grid(
 # ==========================
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if args.src_surf:
+        from fireants.neuio.gifti import load_surf_gii, save_surf_gii, load_label_gii
+        from fireants.utils.mesh import (
+            MeshDeformLoss, deform_mesh, affine_mesh, vox2phy,
+        )
 
     ###################
     # Read volume data
@@ -617,10 +622,12 @@ def main(args):
     src_mean = src_vol_data[src_vol_mask].mean()
     src_std = max(src_vol_data[src_vol_mask].std(), 1e-6)
     src_vol_data = (src_vol_data - src_mean) / src_std
+    src_vol_data[~src_vol_mask] = 0.0
 
     trg_mean = trg_vol_data[trg_vol_mask].mean()
     trg_std = max(trg_vol_data[trg_vol_mask].std(), 1e-6)
     trg_vol_data = (trg_vol_data - trg_mean) / trg_std
+    trg_vol_data[~trg_vol_mask] = 0.0
 
     moving_image = torch.from_numpy(src_vol_data).float()[None][None].to(device)
     fixed_image = torch.from_numpy(trg_vol_data).float()[None][None].to(device)
@@ -689,7 +696,7 @@ def main(args):
     # Register
     ###################
     ncc_img_loss_fn = LocalNormalizedCrossCorrelationLoss(kernel_size=5)
-    mesh_loss_fn = MeshDeformLoss(loss_mode="mse")
+    mesh_loss_fn = MeshDeformLoss(loss_mode="mse") if args.src_surf else None
     reg_loss_fns = DiffusionLoss(normalize=True, reduction="mean")
 
     nonlinear_only = getattr(args, "nonlinear_only", False)
@@ -717,6 +724,7 @@ def main(args):
             learning_rate=getattr(args, "affine_learning_rate", 1e-3),
             loss_type=getattr(args, "affine_loss", "cc"),
             cc_kernel_size=getattr(args, "affine_cc_kernel_size", 11),
+            max_shear=getattr(args, "affine_max_shear", 0.25),
         )
 
     row = torch.zeros(
@@ -875,9 +883,28 @@ def main(args):
         displacement_weight=args.displacement_weight,
         consistency_weight=args.consistency_weight,
         displacement_reg=reg_loss_fns,
+        smooth_warp_sigma=getattr(args, "smooth_warp_sigma", 0.0),
+        smooth_grad_sigma=getattr(args, "smooth_grad_sigma", 0.0),
+        gradient_report_interval=getattr(args, "gradient_report_interval", 0),
     )
 
     reg.optimize()
+    gradient_report_csv = getattr(args, "gradient_report_csv", None)
+    if gradient_report_csv and reg.gradient_reports:
+        gradient_report_path = Path(gradient_report_csv)
+        gradient_report_path.parent.mkdir(parents=True, exist_ok=True)
+        with gradient_report_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=list(reg.gradient_reports[0].keys()),
+            )
+            writer.writeheader()
+            writer.writerows(reg.gradient_reports)
+        print(
+            f"Saved {len(reg.gradient_reports)} gradient component rows to "
+            f"{gradient_report_path}",
+            flush=True,
+        )
 
     # cropped displacement fields
     # shape: [B, D, H, W, 3]

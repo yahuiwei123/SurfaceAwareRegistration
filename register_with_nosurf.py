@@ -38,9 +38,33 @@ def build_parser():
 
     parser.add_argument("--scales", type=int, nargs="+", default=[4, 2, 1])
     parser.add_argument("--iterations", type=int, nargs="+", default=[800, 600, 400])
-    parser.add_argument("--learning_rate", type=float, default=3e-2)
+    parser.add_argument("--learning_rate", type=float, default=0.5)
+    parser.add_argument(
+        "--smooth_warp_sigma",
+        type=float,
+        default=0.5,
+        help="Gaussian sigma (current-scale voxels) applied to the warp after each update",
+    )
+    parser.add_argument(
+        "--smooth_grad_sigma",
+        type=float,
+        default=1.0,
+        help="Gaussian sigma (current-scale voxels) applied to deformation gradients",
+    )
+    parser.add_argument(
+        "--gradient_report_interval",
+        type=int,
+        default=50,
+        help="Report per-loss deformation gradients every N nonlinear iterations; 0 disables",
+    )
+    parser.add_argument(
+        "--gradient_report_csv",
+        default=None,
+        help="Optional CSV destination for detailed per-loss gradient statistics",
+    )
+
     parser.add_argument("--image_weight", type=float, default=1e0)
-    parser.add_argument("--displacement_weight", type=float, default=2e4)
+    parser.add_argument("--displacement_weight", type=float, default=1e4)
     parser.add_argument("--consistency_weight", type=float, default=1e4)
     parser.add_argument(
         "--convergence_eps",
@@ -56,6 +80,12 @@ def build_parser():
     parser.add_argument("--affine_learning_rate", type=float, default=3e-3)
     parser.add_argument("--affine_loss", choices=("cc", "mse", "mi"), default="cc")
     parser.add_argument("--affine_cc_kernel_size", type=int, default=5)
+    parser.add_argument(
+        "--affine_max_shear",
+        type=float,
+        default=0.25,
+        help="Maximum absolute coefficient for each of the three affine shear terms",
+    )
     parser.set_defaults(
         src_surf=None,
         trg_surf=None,
@@ -91,6 +121,15 @@ def _validate(args):
     for name in ("image_weight", "displacement_weight", "consistency_weight"):
         if getattr(args, name) < 0:
             raise ValueError(f"--{name} must be non-negative")
+    for name in ("smooth_warp_sigma", "smooth_grad_sigma"):
+        if getattr(args, name) < 0:
+            raise ValueError(f"--{name} must be non-negative")
+    if args.gradient_report_interval < 0:
+        raise ValueError("--gradient_report_interval must be non-negative")
+    if not 0 <= args.affine_max_shear <= 1:
+        raise ValueError(
+            "--affine_max_shear must be between 0 and 1"
+        )
 
 
 def main(args):

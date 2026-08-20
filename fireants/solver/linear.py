@@ -9,11 +9,14 @@ class AffineWarpField(nn.Module):
     """
     无镜像的仿射场：
         phi(x) = A x + t
-        A = R @ diag(exp(s)), det(A) > 0
+        A = R @ H @ diag(exp(s)), det(A) > 0
+
+    H is unit upper triangular, so its shear terms add the missing affine
+    degrees of freedom without permitting reflections or singular matrices.
 
     支持 2D / 3D:
-      - 2D: rot: [B,1]  旋转角; log_scale: [B,2]; trans: [B,2]
-      - 3D: rot: [B,3]  Euler 角 (rx,ry,rz); log_scale: [B,3]; trans: [B,3]
+      - 2D: 1 rotation, 2 scales, 1 shear, 2 translations
+      - 3D: 3 rotations, 3 scales, 3 shears, 3 translations
     forward 接口:
         moved, grid = affine_model(moving, out_shape)
     """
@@ -22,12 +25,16 @@ class AffineWarpField(nn.Module):
         batch_size: int,
         n_dims: int,
         device: torch.device,
+        max_shear: float = 0.25,
     ):
         super().__init__()
         assert n_dims in (2, 3)
+        if max_shear < 0:
+            raise ValueError("max_shear must be non-negative")
         self.batch_size = batch_size
         self.n_dims = n_dims
         self.device = device
+        self.max_shear = float(max_shear)
 
         if n_dims == 2:
             # [B,1] 旋转角
@@ -38,6 +45,10 @@ class AffineWarpField(nn.Module):
 
         # log_scale -> scale = exp(log_scale) > 0
         self.log_scale = nn.Parameter(torch.zeros(batch_size, n_dims, device=device))
+        # A unit upper-triangular shear has determinant one. tanh bounds each
+        # off-diagonal coefficient to avoid implausible global distortion.
+        n_shears = n_dims * (n_dims - 1) // 2
+        self.raw_shear = nn.Parameter(torch.zeros(batch_size, n_shears, device=device))
         # 平移
         self.trans = nn.Parameter(torch.zeros(batch_size, n_dims, device=device))
 
@@ -89,13 +100,41 @@ class AffineWarpField(nn.Module):
         R = Rz @ Ry @ Rx                # [B,3,3]
         return R
 
+    def _build_shear(self) -> torch.Tensor:
+        """Return a bounded unit upper-triangular shear matrix."""
+        shear = self.max_shear * torch.tanh(self.raw_shear)
+        batch = self.batch_size
+        if self.n_dims == 2:
+            one = torch.ones(batch, device=self.device, dtype=shear.dtype)
+            zero = torch.zeros_like(one)
+            return torch.stack(
+                [
+                    torch.stack([one, shear[:, 0]], dim=-1),
+                    torch.stack([zero, one], dim=-1),
+                ],
+                dim=-2,
+            )
+
+        one = torch.ones(batch, device=self.device, dtype=shear.dtype)
+        zero = torch.zeros_like(one)
+        hxy, hxz, hyz = shear[:, 0], shear[:, 1], shear[:, 2]
+        return torch.stack(
+            [
+                torch.stack([one, hxy, hxz], dim=-1),
+                torch.stack([zero, one, hyz], dim=-1),
+                torch.stack([zero, zero, one], dim=-1),
+            ],
+            dim=-2,
+        )
+
     def _build_theta(self) -> torch.Tensor:
         """
         构造 θ: [B, n_dims, n_dims+1]
         """
         R = self._build_rotation()                          # [B,n,n]
+        H = self._build_shear()                             # [B,n,n]
         S = torch.diag_embed(torch.exp(self.log_scale))     # [B,n,n], diag>0
-        A = torch.bmm(R, S)                                 # [B,n,n], det>0
+        A = torch.bmm(torch.bmm(R, H), S)                   # [B,n,n], det>0
 
         t = self.trans.unsqueeze(-1)                        # [B,n,1]
         theta = torch.cat([A, t], dim=-1)                   # [B,n,n+1]
