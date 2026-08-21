@@ -153,6 +153,29 @@ def crop_bbox_from_params(crop_params, full_shape):
     )
 
 
+def crop_foreground_mask(mask_data, crop_params, image_shape):
+    """Return a boolean foreground mask aligned with a cropped image."""
+    if mask_data is None:
+        return None
+
+    i0, i1, j0, j1, k0, k1 = crop_bbox_from_params(
+        crop_params,
+        mask_data.shape[:3],
+    )
+    mask = np.ascontiguousarray(
+        mask_data[i0:i1, j0:j1, k0:k1] > 0,
+    )
+    expected_shape = tuple(image_shape[:3])
+    if mask.shape != expected_shape:
+        raise ValueError(
+            "Cropped foreground mask shape does not match image: "
+            f"{mask.shape} != {expected_shape}"
+        )
+    if not mask.any():
+        raise ValueError("Foreground mask is empty after cropping")
+    return mask
+
+
 def crop_offset_xyz(crop_params, device, dtype):
     """Return crop offset in grid_sample order: x, y, z = k, j, i."""
     if crop_params is None:
@@ -616,8 +639,23 @@ def main(args):
     src_vol_data = contiguous_image_data(src_vol, dtype=np.float32)
     trg_vol_data = contiguous_image_data(trg_vol, dtype=np.float32)
 
-    src_vol_mask = src_vol_data > 0
-    trg_vol_mask = trg_vol_data > 0
+    # Prefer the caller-provided anatomical masks. Some nominally
+    # brain-extracted inputs retain small positive values outside the brain,
+    # so intensity > 0 is only a fallback when no explicit mask is available.
+    src_vol_mask = crop_foreground_mask(
+        src_mask_data,
+        src_crop,
+        src_vol_data.shape,
+    )
+    if src_vol_mask is None:
+        src_vol_mask = src_vol_data > 0
+    trg_vol_mask = crop_foreground_mask(
+        trg_mask_data,
+        trg_crop,
+        trg_vol_data.shape,
+    )
+    if trg_vol_mask is None:
+        trg_vol_mask = trg_vol_data > 0
 
     src_mean = src_vol_data[src_vol_mask].mean()
     src_std = max(src_vol_data[src_vol_mask].std(), 1e-6)
@@ -717,8 +755,12 @@ def main(args):
         init_affine, _ = get_affine_transform(
             fixed_image,
             moving_image,
-            fixed_surf,
-            moving_surf,
+            # Keep affine initialization volume-only. Surfaces can be badly
+            # misaligned before affine registration and otherwise dominate.
+            # The affine is still applied to the moving surface, and surfaces
+            # remain active in the nonlinear stage below.
+            None,
+            None,
             affine_iters=getattr(args, "affine_iterations", 400),
             affine_scales=getattr(args, "affine_scales", None),
             learning_rate=getattr(args, "affine_learning_rate", 1e-3),

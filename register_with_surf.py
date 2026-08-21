@@ -40,9 +40,9 @@ def build_parser():
     parser.add_argument("--scales", type=int, nargs="+", default=[4, 2, 1])
     parser.add_argument("--iterations", type=int, nargs="+", default=[800, 600, 400])
     parser.add_argument("--learning_rate", type=float, default=0.4)
-    parser.add_argument("--image_weight", type=float, default=6e-5)
+    parser.add_argument("--image_weight", type=float, default=2e-4)
     parser.add_argument("--surface_weight", type=float, default=1.0)
-    parser.add_argument("--displacement_weight", type=float, default=0.5)
+    parser.add_argument("--displacement_weight", type=float, default=5.0)
     parser.add_argument("--consistency_weight", type=float, default=1.0)
     parser.add_argument(
         "--convergence_eps",

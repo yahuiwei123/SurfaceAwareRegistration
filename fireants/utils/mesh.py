@@ -6,7 +6,6 @@ from typing import Tuple, List, Union, Optional
 import nibabel as nib
 import numpy as np
 
-from pytorch3d.loss import chamfer_distance
 
 
 def affine_mesh(

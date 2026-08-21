@@ -26,6 +26,7 @@ import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
 from scipy import ndimage
+from skimage.filters import threshold_otsu
 
 
 HERE = Path(__file__).resolve().parent
@@ -77,6 +78,35 @@ def foreground_lcc_ratio(path: Path) -> float:
     return float(sizes.max() / foreground.sum())
 
 
+def companion_mask(path: Path) -> Path | None:
+    """Find a usable mask on the same 0.4 mm grid as a selected T1."""
+    brain_mask = Path(
+        str(path).replace(
+            "_desc-brain_T1w.nii.gz",
+            "_desc-brain_mask.nii.gz",
+        )
+    )
+    if brain_mask.exists():
+        mask = np.asarray(nib.load(str(brain_mask)).dataobj) > 0
+        # Reject corrupt/all-FOV masks such as the Utrecht brain mask.
+        fraction = float(mask.mean())
+        if mask.any() and fraction < 0.9:
+            return brain_mask
+
+    complete_aseg = Path(
+        str(path).replace(
+            "_desc-brain_T1w.nii.gz",
+            "_desc-completeaseg_dseg.nii.gz",
+        )
+    )
+    if complete_aseg.exists():
+        mask = np.asarray(nib.load(str(complete_aseg)).dataobj) > 0
+        fraction = float(mask.mean())
+        if mask.any() and fraction < 0.9:
+            return complete_aseg
+    return None
+
+
 def candidates(site: Path) -> list[Path]:
     patterns = (
         "output/*/*/Enhance/T1w/*_res-04mm_desc-brain_T1w.nii.gz",
@@ -106,15 +136,20 @@ def build_manifest(root: Path, selected: list[str] | None):
         paths = candidates(site)
         chosen = None
         ratio = math.nan
+        best_ratio = -math.inf
         for path in paths:
-            ratio = foreground_lcc_ratio(path)
-            if ratio >= 0.99 or len(paths) == 1:
-                chosen = path
+            mask_path = companion_mask(path)
+            current_ratio = foreground_lcc_ratio(mask_path or path)
+            if current_ratio > best_ratio:
+                chosen, ratio = path, current_ratio
+                best_ratio = current_ratio
+            if current_ratio >= 0.99:
                 break
         if chosen is None:
-            rows.append({"site": site.name, "status": "unavailable_no_processed_brain_T1", "example": "", "src_vol": "", "foreground_lcc_ratio": ""})
+            rows.append({"site": site.name, "status": "unavailable_no_processed_brain_T1", "example": "", "src_vol": "", "src_mask": "", "foreground_lcc_ratio": ""})
         else:
-            rows.append({"site": site.name, "status": "ready", "example": chosen.name.removesuffix(".nii.gz"), "src_vol": str(chosen), "foreground_lcc_ratio": f"{ratio:.8f}"})
+            mask_path = companion_mask(chosen)
+            rows.append({"site": site.name, "status": "ready", "example": chosen.name.removesuffix(".nii.gz"), "src_vol": str(chosen), "src_mask": str(mask_path) if mask_path else "", "foreground_lcc_ratio": f"{ratio:.8f}"})
     return rows
 
 
@@ -135,7 +170,19 @@ def write_csv(path: Path, rows: list[dict]):
 
 def save_mask(source: Path, output: Path):
     image = nib.load(str(source))
-    mask = (np.asarray(image.dataobj) > 0).astype(np.uint8)
+    data = np.asarray(image.dataobj)
+    foreground = np.isfinite(data) & (data > 0)
+    if foreground.mean() >= 0.9 and np.ptp(data) > 0:
+        values = data[np.isfinite(data)]
+        threshold = threshold_otsu(values)
+        foreground = np.isfinite(data) & (data > threshold)
+        components, count = ndimage.label(foreground)
+        if count:
+            sizes = np.bincount(components.ravel())
+            sizes[0] = 0
+            foreground = components == sizes.argmax()
+            foreground = ndimage.binary_fill_holes(foreground)
+    mask = foreground.astype(np.uint8)
     result = nib.Nifti1Image(mask, image.affine, image.header)
     result.set_data_dtype(np.uint8)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -169,7 +216,10 @@ def run_registration(args, row):
     site_dir.mkdir(parents=True, exist_ok=True)
     out = outputs(site_dir)
     if args.overwrite or not out["source_mask"].exists():
-        save_mask(Path(row["src_vol"]), out["source_mask"])
+        save_mask(
+            Path(row.get("src_mask") or row["src_vol"]),
+            out["source_mask"],
+        )
     required = [
         out[k] for k in
         ("affine", "affine_mask", "nonlinear", "nonlinear_mask", "warp", "gradient_csv")

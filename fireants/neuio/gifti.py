@@ -1,7 +1,24 @@
 import numpy as np
 import torch
 import nibabel as nib
-from pytorch3d.structures import Meshes
+
+class GiftiMesh:
+    """Minimal packed mesh container used by the registration pipeline."""
+
+    def __init__(self, verts: torch.Tensor, faces: torch.Tensor):
+        self._verts = verts
+        self._faces = faces
+
+    def verts_packed(self) -> torch.Tensor:
+        return self._verts
+
+    def faces_packed(self) -> torch.Tensor:
+        return self._faces
+
+    def to(self, device):
+        return GiftiMesh(self._verts.to(device), self._faces.to(device))
+
+
 
 def save_surf_gii(vertices, faces, filename):
     """
@@ -72,10 +89,7 @@ def load_surf_gii(filename, volume_affine=None):
     if volume_affine is not None:
         verts = nib.affines.apply_affine(np.linalg.inv(volume_affine), verts)
 
-    return Meshes(
-        verts=[torch.from_numpy(verts).float()],
-        faces=[torch.from_numpy(faces).long()]
-    )
+    return GiftiMesh(torch.from_numpy(verts).float(), torch.from_numpy(faces).long())
 
 def load_label_gii(label_path: str) -> np.ndarray:
     """
